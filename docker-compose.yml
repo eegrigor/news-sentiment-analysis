@@ -1,0 +1,121 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      retries: 5
+
+  airflow-init:
+    image: apache/airflow:2.10.2
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__LOGGING__REMOTE_LOGGING: "False"
+      HF_HOME: /opt/airflow/hf_cache
+    user: "${AIRFLOW_UID:-50000}:0"
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      set -e
+      pip install --no-cache-dir \
+        python-dotenv pandas requests \
+        transformers \
+        torch 
+      airflow db init
+      airflow users create \
+        --role Admin --username admin --password admin \
+        --firstname Admin --lastname User --email admin@example.com
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/dags/tmp:/opt/airflow/dags/tmp
+      - ./airflow/hf_cache:/opt/airflow/hf_cache
+      - ./.env:/opt/airflow/.env:ro
+      - ./utils:/opt/airflow/utils
+      - ./airflow/logs:/opt/airflow/logs
+
+  scheduler:
+    image: apache/airflow:2.10.2
+    depends_on:
+      - postgres
+      - airflow-init
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__LOGGING__REMOTE_LOGGING: "False"
+      HF_HOME: /opt/airflow/hf_cache
+      _PIP_ADDITIONAL_REQUIREMENTS: "python-dotenv pandas requests transformers torch"
+    user: "${AIRFLOW_UID:-50000}:0"
+    command: scheduler
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/dags/tmp:/opt/airflow/dags/tmp
+      - ./airflow/hf_cache:/opt/airflow/hf_cache
+      - ./.env:/opt/airflow/.env:ro
+      - ./utils:/opt/airflow/utils
+      - ./airflow/logs:/opt/airflow/logs
+
+  webserver:
+    image: apache/airflow:2.10.2
+    depends_on:
+      - scheduler
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__LOGGING__REMOTE_LOGGING: "False"
+      HF_HOME: /opt/airflow/hf_cache
+      _PIP_ADDITIONAL_REQUIREMENTS: "python-dotenv pandas requests transformers torch"
+    user: "${AIRFLOW_UID:-50000}:0"
+    command: webserver
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/dags/tmp:/opt/airflow/dags/tmp
+      - ./airflow/hf_cache:/opt/airflow/hf_cache
+      - ./.env:/opt/airflow/.env:ro
+      - ./utils:/opt/airflow/utils
+      - ./airflow/logs:/opt/airflow/logs
+
+  streamlit:
+    image: python:3.12-slim
+    depends_on:
+      - webserver
+    working_dir: /app
+    user: "0:0"
+    command: >
+      bash -lc "
+        python -m venv /opt/venv &&
+        . /opt/venv/bin/activate &&
+        pip install --no-cache-dir --upgrade pip &&
+        pip install --no-cache-dir streamlit altair pandas python-dotenv &&
+        exec /opt/venv/bin/streamlit run /app/streamlit_app.py
+          --server.port=8501 --server.address=0.0.0.0
+      "
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./visualizations/app.py:/app/streamlit_app.py:ro
+      - ./.env:/opt/airflow/.env:ro
+      - ./airflow/dags/tmp:/opt/airflow/dags/tmp:ro
+      - ./utils:/opt/airflow/utils
+
+volumes:
+  pgdata:
