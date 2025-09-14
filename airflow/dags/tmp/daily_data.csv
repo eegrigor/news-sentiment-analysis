@@ -1,0 +1,4 @@
+company,published_date,average_sentiment,positive_count,negative_count
+Google,2025-09-13,POSITIVE,9,1
+Microsoft,2025-09-13,NEUTRAL,5,5
+Tesla,2025-09-13,POSITIVE,6,4
